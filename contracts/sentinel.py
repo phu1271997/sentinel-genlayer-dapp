@@ -43,6 +43,9 @@ class Contract(gl.Contract):
     pending_balance_of: TreeMap[str, u256]
     hunter_index: TreeMap[str, DynArray[str]]
 
+    # Milestone 2: New storage variables
+    report_sources_of: TreeMap[str, str]
+
     def __init__(self):
         self.owner = gl.message.sender_address
         self.platform_fee_bps = u256(250)
@@ -67,6 +70,23 @@ class Contract(gl.Contract):
             line_clean = line.replace("`", "")
             sanitized_lines.append(line_clean)
         return '\n'.join(sanitized_lines)
+
+    # Helper to extract the first domain-like token from identity text
+    def _extract_domain(self, text: str) -> str:
+        words = text.split()
+        for w in words:
+            w_clean = w.strip(".,;:()\"'!?")
+            if "://" in w_clean:
+                parts = w_clean.split("://")
+                if len(parts) > 1:
+                    return parts[1].split('/')[0]
+            if "." in w_clean and len(w_clean) > 4 and not w_clean.startswith("@"):
+                parts = w_clean.split(".")
+                last_part = parts[-1].split('/')[0].lower()
+                if last_part.isalnum() and 2 <= len(last_part) <= 6:
+                    res = w_clean.replace("https://", "").replace("http://", "")
+                    return res.split('/')[0]
+        return ""
 
     @gl.public.write
     def set_report_stake(self, amount: u256) -> None:
@@ -186,6 +206,11 @@ class Contract(gl.Contract):
         brand_name = self.bounty_name_of[bounty_id] if bounty_id in self.bounty_name_of else ""
         identity = self.bounty_identity_of[bounty_id] if bounty_id in self.bounty_identity_of else ""
 
+        # Parse host for external search queries
+        temp_url = url.replace("https://", "").replace("http://", "")
+        host = temp_url.split('/')[0].split('?')[0].split(':')[0]
+        canonical_domain = self._extract_domain(identity)
+
         # Deterministic canary token derived from block context
         dt_str = gl.message_raw.get('datetime', '')
         token_input = f"{report_id}:{dt_str}"
@@ -201,7 +226,13 @@ class Contract(gl.Contract):
                     "is_scam": False,
                     "scam_type": "none",
                     "severity": 0,
+                    "confidence": 100,
                     "reasoning": "duplicate of an already-rewarded report",
+                    "perspectives": {
+                        "forensic": "Duplicate detection triggered.",
+                        "skeptic": "Duplicate detection triggered.",
+                        "legal": "Duplicate detection triggered."
+                    }
                 },
                 sort_keys=True,
             )
@@ -216,8 +247,54 @@ class Contract(gl.Contract):
             
             return self.report_verdict_of[report_id]
 
-        def leader_fn():
-            page_text = gl.nondet.web.render(url, mode="text")
+        def leader_fn() -> str:
+            sources = []
+            
+            # 1. Suspect URL (existing)
+            try:
+                suspect_text = gl.nondet.web.render(url, mode="text")
+                sources.append({"name": "Suspect URL Text", "url": url, "text": suspect_text[:1500]})
+            except Exception:
+                pass
+                
+            # 2. Wayback Archive
+            try:
+                wayback_url = f"https://web.archive.org/web/2025/{url}"
+                wayback_text = gl.nondet.web.render(wayback_url, mode="text")
+                sources.append({"name": "Wayback Archive", "url": wayback_url, "text": wayback_text[:1500]})
+            except Exception:
+                pass
+                
+            # 3. urlscan.io
+            try:
+                urlscan_url = f"https://urlscan.io/search/#page.url:%22{host}%22"
+                urlscan_text = gl.nondet.web.render(urlscan_url, mode="text")
+                sources.append({"name": "urlscan.io Search", "url": urlscan_url, "text": urlscan_text[:1500]})
+            except Exception:
+                pass
+                
+            # 4. VirusTotal
+            try:
+                vt_url = f"https://www.virustotal.com/gui/domain/{host}"
+                vt_text = gl.nondet.web.render(vt_url, mode="text")
+                sources.append({"name": "VirusTotal Domain Report", "url": vt_url, "text": vt_text[:1500]})
+            except Exception:
+                pass
+                
+            # 5. Brand Truth website rendering
+            if canonical_domain:
+                try:
+                    brand_truth_url = f"https://{canonical_domain}"
+                    brand_truth_text = gl.nondet.web.render(brand_truth_url, mode="text")
+                    sources.append({"name": "Official Brand Website", "url": brand_truth_url, "text": brand_truth_text[:1500]})
+                except Exception:
+                    pass
+
+            # Formulate cross-referenced sources summary
+            sources_formatted = ""
+            for s in sources:
+                sources_formatted += f"--- SOURCE: {s['name']} ({s['url']}) ---\n{s['text']}\n\n"
+
             shot = gl.nondet.web.render(url, mode="screenshot")
             prompt = f"""You are a strict brand-protection / anti-phishing analyst.
 
@@ -225,17 +302,21 @@ OFFICIAL BRAND: {brand_name}
 OFFICIAL IDENTITY (legitimate domains, handles, how the real brand looks):
 {identity}
 
-You are shown a SUSPECT web page (rendered text + a screenshot).
-SUSPECT URL: {url}
-SUSPECT PAGE TEXT:
-{page_text}
+You are shown cross-referenced web sources for the SUSPECT URL: {url}
+{sources_formatted}
 
-Decide whether this page impersonates / phishes / scams the brand above
-(fake login, lookalike domain, fake giveaway, counterfeit store, fake support, wallet drainer, etc).
+You also have a screenshot of the suspect page.
+
+Decide whether this page impersonates / phishes / scams the brand above.
 NEVER flag the brand's own official properties as a scam.
 
 CRITICAL SECURITY REQUIREMENT:
 You MUST echo the security canary token {canary} in your response under the key "canary".
+
+Perform a detailed evaluation from three distinct perspectives:
+1. Forensic Analyst: Analyze HTML/text artifacts, hosting details, and domain reputation.
+2. Skeptical User: Look at visual elements, branding, and UX red flags (e.g. pressure tactics, spelling errors).
+3. Brand-Protection Lawyer: Evaluate trademark usage, logo abuse, and impersonation.
 
 Respond with ONLY valid JSON:
 {{
@@ -243,7 +324,13 @@ Respond with ONLY valid JSON:
   "is_scam": true or false,
   "scam_type": "phishing | impersonation | counterfeit | fake_giveaway | fake_support | wallet_drainer | other | none",
   "severity": <integer 0-100>,
-  "reasoning": "one short paragraph citing concrete evidence from the page"
+  "confidence": <integer 0-100>,
+  "reasoning": "one short paragraph citing concrete evidence",
+  "perspectives": {{
+    "forensic": "forensic analyst verdict and findings",
+    "skeptic": "skeptical user visual/UX findings",
+    "legal": "brand lawyer trademark/impersonation findings"
+  }}
 }}
 
 severity guide:
@@ -252,27 +339,30 @@ severity guide:
 - clear impersonation, moderate harm -> 31-70
 - active credential phishing / wallet drainer / financial theft -> 71-100
 """
-            return gl.nondet.exec_prompt(prompt, images=[shot], response_format="json")
+            res = gl.nondet.exec_prompt(prompt, images=[shot], response_format="json")
+            urls_used = [s["url"] for s in sources]
+            return json.dumps({"verdict": res, "sources": urls_used}, sort_keys=True)
 
-        def validator_fn(leader_result) -> bool:
-            if not isinstance(leader_result, gl.vm.Return):
-                return False
-            try:
-                mine = leader_fn()
-                theirs = leader_result.calldata
-                if theirs.get("canary") != canary:
-                    return False
-                if bool(mine.get("is_scam")) != bool(theirs.get("is_scam")):
-                    return False
-                return abs(int(mine.get("severity", 0)) - int(theirs.get("severity", 0))) <= 20
-            except Exception:
-                return False
+        principle = (
+            "Compare the 'verdict' object inside the JSON payload. "
+            "Two verdicts agree if and only if: "
+            "(a) is_scam booleans are identical, "
+            "(b) scam_type buckets match (phishing/impersonation/counterfeit/"
+            "fake_giveaway/fake_support/wallet_drainer/other/none), "
+            "(c) severity values are within ±15, "
+            "(d) reasoning cites at least one overlapping concrete artifact."
+        )
 
-        verdict = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        ruling_str = gl.eq_principle.prompt_comparative(leader_fn, principle)
+        ruling = json.loads(ruling_str)
+        verdict = ruling["verdict"]
+        sources_used = ruling["sources"]
+
         if verdict.get("canary") != canary:
             raise gl.vm.UserError("Canary token mismatch")
 
         self.report_verdict_of[report_id] = json.dumps(verdict, sort_keys=True)
+        self.report_sources_of[report_id] = json.dumps(sources_used)
 
         is_scam = bool(verdict.get("is_scam"))
         severity_raw = int(verdict.get("severity", 0))
@@ -281,6 +371,8 @@ severity guide:
         if severity_raw > 100:
             severity_raw = 100
         severity = u256(severity_raw)
+        
+        confidence = int(verdict.get("confidence", 100))
 
         if is_scam and severity > u256(0):
             base = self.bounty_base_reward_of[bounty_id] if bounty_id in self.bounty_base_reward_of else u256(0)
@@ -315,14 +407,21 @@ severity guide:
                 raise gl.vm.UserError("overflow guard")
             self.pending_balance_of[owner_str] = self.pending_balance_of[owner_str] + fee
         else:
-            self.report_status_of[report_id] = "REJECTED"
-            self.report_severity_of[report_id] = u256(0)
-            self.report_payout_of[report_id] = u256(0)
-            
-            pool = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
-            if pool > u256(2**255) or stake > u256(2**255):
-                raise gl.vm.UserError("overflow guard")
-            self.bounty_pool_of[bounty_id] = pool + stake
+            # If AI is not certain, mark as NEEDS_REVIEW instead of REJECTED
+            if confidence < 60:
+                self.report_status_of[report_id] = "NEEDS_REVIEW"
+                self.report_severity_of[report_id] = u256(0)
+                self.report_payout_of[report_id] = u256(0)
+                # Stake remains locked in report_stake_of, not forfeited yet
+            else:
+                self.report_status_of[report_id] = "REJECTED"
+                self.report_severity_of[report_id] = u256(0)
+                self.report_payout_of[report_id] = u256(0)
+                
+                pool = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
+                if pool > u256(2**255) or stake > u256(2**255):
+                    raise gl.vm.UserError("overflow guard")
+                self.bounty_pool_of[bounty_id] = pool + stake
 
         return self.report_verdict_of[report_id]
 
@@ -407,5 +506,6 @@ severity guide:
             "severity": str(self.report_severity_of[report_id]) if report_id in self.report_severity_of else "0",
             "payout": str(self.report_payout_of[report_id]) if report_id in self.report_payout_of else "0",
             "verdict": self.report_verdict_of[report_id] if report_id in self.report_verdict_of else "",
+            "sources": self.report_sources_of[report_id] if report_id in self.report_sources_of else "[]",
         }
         return json.dumps(data)
