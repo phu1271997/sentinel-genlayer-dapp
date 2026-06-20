@@ -117,3 +117,4 @@ Amounts are entered as GEN and converted to wei before contract calls.
 List of completed upgrades and tagged releases for the GenLayer Builder Program:
 
 - **[v2.M1] — Security Hardening Bundle v1** (2026-06-20): Added prompt injection canary defense, input sanitization, safe TreeMap access, arithmetic overflow guards, pull-withdrawal pattern, double-evaluate lock, and automated unit tests. [Changelog](CHANGELOG.md#v2m1-security-hardening-bundle-v1-2026-06-20)
+- **[v2.M2] — AI Consensus Upgrade** (2026-06-20): Replaced standard leader evaluation with `gl.eq_principle.prompt_comparative` multi-node consensus, integrated 5 cross-referenced rendering sources (Wayback, urlscan, VirusTotal, Brand Truth), added 3 analyst perspectives (forensic, skeptic, legal), and implemented confidence gating. [Changelog](CHANGELOG.md#v2m2-ai-consensus-upgrade-2026-06-20)
