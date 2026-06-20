@@ -2,6 +2,7 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
 import json
+import hashlib
 
 
 @gl.evm.contract_interface
@@ -38,12 +39,34 @@ class Contract(gl.Contract):
 
     claimed_of: TreeMap[str, bool]
 
+    # Milestone 1: New storage variables
+    pending_balance_of: TreeMap[str, u256]
+    hunter_index: TreeMap[str, DynArray[str]]
+
     def __init__(self):
         self.owner = gl.message.sender_address
         self.platform_fee_bps = u256(250)
         self.report_stake = u256(0)
         self.next_bounty_id = u256(0)
         self.next_report_id = u256(0)
+
+    # Helper to normalize addresses to lowercase hex strings
+    def _normalize_address(self, addr: Address) -> str:
+        return str(addr).lower()
+
+    # Helper to sanitize user inputs to mitigate prompt injection
+    def _sanitize_user_text(self, s: str) -> str:
+        lines = s.split('\n')
+        sanitized_lines = []
+        for line in lines:
+            trimmed = line.strip()
+            lower_trimmed = trimmed.lower()
+            if lower_trimmed.startswith("ignore") or lower_trimmed.startswith("system:") or lower_trimmed.startswith("user:"):
+                continue
+            # Strip backticks to avoid escaping markdown prompt boundaries
+            line_clean = line.replace("`", "")
+            sanitized_lines.append(line_clean)
+        return '\n'.join(sanitized_lines)
 
     @gl.public.write
     def set_report_stake(self, amount: u256) -> None:
@@ -68,11 +91,12 @@ class Contract(gl.Contract):
 
         bounty_id = str(self.next_bounty_id)
         self.bounty_brand_of[bounty_id] = gl.message.sender_address
-        self.bounty_name_of[bounty_id] = brand_name
-        self.bounty_identity_of[bounty_id] = official_identity
+        self.bounty_name_of[bounty_id] = self._sanitize_user_text(brand_name)
+        self.bounty_identity_of[bounty_id] = self._sanitize_user_text(official_identity)
         self.bounty_pool_of[bounty_id] = gl.message.value
         self.bounty_base_reward_of[bounty_id] = base_reward
         self.bounty_active_of[bounty_id] = True
+        
         self.next_bounty_id = self.next_bounty_id + u256(1)
         return bounty_id
 
@@ -80,29 +104,47 @@ class Contract(gl.Contract):
     def top_up_bounty(self, bounty_id: str) -> None:
         if not (bounty_id in self.bounty_active_of):
             raise gl.vm.UserError("Unknown bounty")
-        if not self.bounty_active_of[bounty_id]:
+        bounty_active = self.bounty_active_of[bounty_id] if bounty_id in self.bounty_active_of else False
+        if not bounty_active:
             raise gl.vm.UserError("Bounty inactive")
         if gl.message.value == u256(0):
             raise gl.vm.UserError("Must send value")
-        self.bounty_pool_of[bounty_id] = self.bounty_pool_of[bounty_id] + gl.message.value
+        
+        pool = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
+        val = gl.message.value
+        if pool > u256(2**255) or val > u256(2**255):
+            raise gl.vm.UserError("overflow guard")
+        
+        self.bounty_pool_of[bounty_id] = pool + val
 
     @gl.public.write
     def deactivate_and_withdraw(self, bounty_id: str) -> None:
         if not (bounty_id in self.bounty_active_of):
             raise gl.vm.UserError("Unknown bounty")
-        if gl.message.sender_address != self.bounty_brand_of[bounty_id]:
+        bounty_brand = self.bounty_brand_of[bounty_id] if bounty_id in self.bounty_brand_of else Address("0x0000000000000000000000000000000000000000")
+        if gl.message.sender_address != bounty_brand:
             raise gl.vm.UserError("Only the brand")
 
-        remaining = self.bounty_pool_of[bounty_id]
+        remaining = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
         self.bounty_pool_of[bounty_id] = u256(0)
         self.bounty_active_of[bounty_id] = False
-        self._pay(self.bounty_brand_of[bounty_id], remaining)
+        
+        # Credit to brand's pending balance instead of push-payment
+        brand_str = self._normalize_address(bounty_brand)
+        if brand_str not in self.pending_balance_of:
+            self.pending_balance_of[brand_str] = u256(0)
+        
+        if remaining > u256(2**255) or self.pending_balance_of[brand_str] > u256(2**255):
+            raise gl.vm.UserError("overflow guard")
+            
+        self.pending_balance_of[brand_str] = self.pending_balance_of[brand_str] + remaining
 
     @gl.public.write.payable
     def submit_report(self, bounty_id: str, suspicious_url: str) -> str:
         if not (bounty_id in self.bounty_active_of):
             raise gl.vm.UserError("Unknown bounty")
-        if not self.bounty_active_of[bounty_id]:
+        bounty_active = self.bounty_active_of[bounty_id] if bounty_id in self.bounty_active_of else False
+        if not bounty_active:
             raise gl.vm.UserError("Bounty inactive")
         if gl.message.value < self.report_stake:
             raise gl.vm.UserError("Insufficient anti-spam stake")
@@ -112,11 +154,16 @@ class Contract(gl.Contract):
         report_id = str(self.next_report_id)
         self.report_bounty_of[report_id] = bounty_id
         self.report_hunter_of[report_id] = gl.message.sender_address
-        self.report_url_of[report_id] = suspicious_url
+        self.report_url_of[report_id] = self._sanitize_user_text(suspicious_url)
         self.report_stake_of[report_id] = gl.message.value
         self.report_status_of[report_id] = "PENDING"
         self.report_severity_of[report_id] = u256(0)
         self.report_payout_of[report_id] = u256(0)
+        
+        # Index the report under the hunter
+        hunter_str = self._normalize_address(gl.message.sender_address)
+        self.hunter_index.get_or_insert_default(hunter_str).append(report_id)
+        
         self.next_report_id = self.next_report_id + u256(1)
         return report_id
 
@@ -124,15 +171,25 @@ class Contract(gl.Contract):
     def evaluate_report(self, report_id: str) -> str:
         if not (report_id in self.report_status_of):
             raise gl.vm.UserError("Unknown report")
-        if self.report_status_of[report_id] != "PENDING":
-            raise gl.vm.UserError("Already evaluated")
+        
+        status = self.report_status_of[report_id] if report_id in self.report_status_of else ""
+        if status != "PENDING":
+            raise gl.vm.UserError("Already evaluated or evaluation in progress")
 
-        bounty_id = self.report_bounty_of[report_id]
-        hunter = self.report_hunter_of[report_id]
-        stake = self.report_stake_of[report_id]
-        url = self.report_url_of[report_id]
-        brand_name = self.bounty_name_of[bounty_id]
-        identity = self.bounty_identity_of[bounty_id]
+        # Set status to EVALUATING to prevent race condition/re-evaluation
+        self.report_status_of[report_id] = "EVALUATING"
+
+        bounty_id = self.report_bounty_of[report_id] if report_id in self.report_bounty_of else ""
+        hunter = self.report_hunter_of[report_id] if report_id in self.report_hunter_of else Address("0x0000000000000000000000000000000000000000")
+        stake = self.report_stake_of[report_id] if report_id in self.report_stake_of else u256(0)
+        url = self.report_url_of[report_id] if report_id in self.report_url_of else ""
+        brand_name = self.bounty_name_of[bounty_id] if bounty_id in self.bounty_name_of else ""
+        identity = self.bounty_identity_of[bounty_id] if bounty_id in self.bounty_identity_of else ""
+
+        # Deterministic canary token derived from block context
+        dt_str = gl.message_raw.get('datetime', '')
+        token_input = f"{report_id}:{dt_str}"
+        canary = hashlib.sha256(token_input.encode('utf-8')).hexdigest()[:8]
 
         dedup_key = bounty_id + "|" + url
         already = (dedup_key in self.claimed_of) and self.claimed_of[dedup_key]
@@ -140,6 +197,7 @@ class Contract(gl.Contract):
             self.report_status_of[report_id] = "REJECTED"
             self.report_verdict_of[report_id] = json.dumps(
                 {
+                    "canary": canary,
                     "is_scam": False,
                     "scam_type": "none",
                     "severity": 0,
@@ -147,7 +205,15 @@ class Contract(gl.Contract):
                 },
                 sort_keys=True,
             )
-            self._pay(hunter, stake)
+            
+            # Credit hunter stake back to pending balance
+            hunter_str = self._normalize_address(hunter)
+            if hunter_str not in self.pending_balance_of:
+                self.pending_balance_of[hunter_str] = u256(0)
+            if stake > u256(2**255) or self.pending_balance_of[hunter_str] > u256(2**255):
+                raise gl.vm.UserError("overflow guard")
+            self.pending_balance_of[hunter_str] = self.pending_balance_of[hunter_str] + stake
+            
             return self.report_verdict_of[report_id]
 
         def leader_fn():
@@ -168,8 +234,12 @@ Decide whether this page impersonates / phishes / scams the brand above
 (fake login, lookalike domain, fake giveaway, counterfeit store, fake support, wallet drainer, etc).
 NEVER flag the brand's own official properties as a scam.
 
+CRITICAL SECURITY REQUIREMENT:
+You MUST echo the security canary token {canary} in your response under the key "canary".
+
 Respond with ONLY valid JSON:
 {{
+  "canary": "{canary}",
   "is_scam": true or false,
   "scam_type": "phishing | impersonation | counterfeit | fake_giveaway | fake_support | wallet_drainer | other | none",
   "severity": <integer 0-100>,
@@ -190,17 +260,22 @@ severity guide:
             try:
                 mine = leader_fn()
                 theirs = leader_result.calldata
-                if bool(mine["is_scam"]) != bool(theirs["is_scam"]):
+                if theirs.get("canary") != canary:
                     return False
-                return abs(int(mine["severity"]) - int(theirs["severity"])) <= 20
+                if bool(mine.get("is_scam")) != bool(theirs.get("is_scam")):
+                    return False
+                return abs(int(mine.get("severity", 0)) - int(theirs.get("severity", 0))) <= 20
             except Exception:
                 return False
 
         verdict = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        if verdict.get("canary") != canary:
+            raise gl.vm.UserError("Canary token mismatch")
+
         self.report_verdict_of[report_id] = json.dumps(verdict, sort_keys=True)
 
-        is_scam = bool(verdict["is_scam"])
-        severity_raw = int(verdict["severity"])
+        is_scam = bool(verdict.get("is_scam"))
+        severity_raw = int(verdict.get("severity", 0))
         if severity_raw < 0:
             severity_raw = 0
         if severity_raw > 100:
@@ -208,8 +283,8 @@ severity guide:
         severity = u256(severity_raw)
 
         if is_scam and severity > u256(0):
-            base = self.bounty_base_reward_of[bounty_id]
-            pool = self.bounty_pool_of[bounty_id]
+            base = self.bounty_base_reward_of[bounty_id] if bounty_id in self.bounty_base_reward_of else u256(0)
+            pool = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
             gross = base * severity // u256(100)
             if gross > pool:
                 gross = pool
@@ -222,15 +297,49 @@ severity guide:
             self.report_status_of[report_id] = "CONFIRMED"
             self.claimed_of[dedup_key] = True
 
-            self._pay(hunter, net + stake)
-            self._pay(self.owner, fee)
+            # Credit payout to hunter pending balance
+            hunter_str = self._normalize_address(hunter)
+            owner_str = self._normalize_address(self.owner)
+
+            if hunter_str not in self.pending_balance_of:
+                self.pending_balance_of[hunter_str] = u256(0)
+            if owner_str not in self.pending_balance_of:
+                self.pending_balance_of[owner_str] = u256(0)
+
+            payout_hunter = net + stake
+            if payout_hunter > u256(2**255) or self.pending_balance_of[hunter_str] > u256(2**255):
+                raise gl.vm.UserError("overflow guard")
+            self.pending_balance_of[hunter_str] = self.pending_balance_of[hunter_str] + payout_hunter
+
+            if fee > u256(2**255) or self.pending_balance_of[owner_str] > u256(2**255):
+                raise gl.vm.UserError("overflow guard")
+            self.pending_balance_of[owner_str] = self.pending_balance_of[owner_str] + fee
         else:
             self.report_status_of[report_id] = "REJECTED"
             self.report_severity_of[report_id] = u256(0)
             self.report_payout_of[report_id] = u256(0)
-            self.bounty_pool_of[bounty_id] = self.bounty_pool_of[bounty_id] + stake
+            
+            pool = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
+            if pool > u256(2**255) or stake > u256(2**255):
+                raise gl.vm.UserError("overflow guard")
+            self.bounty_pool_of[bounty_id] = pool + stake
 
         return self.report_verdict_of[report_id]
+
+    # Pull withdrawal method for users to withdraw their pending balances
+    @gl.public.write
+    def withdraw(self) -> None:
+        caller_str = self._normalize_address(gl.message.sender_address)
+        if caller_str not in self.pending_balance_of:
+            raise gl.vm.UserError("No balance to withdraw")
+        
+        amount = self.pending_balance_of[caller_str]
+        if amount == u256(0):
+            raise gl.vm.UserError("Zero balance")
+
+        # Zero balance before calling payment to prevent reentrancy-like issues
+        self.pending_balance_of[caller_str] = u256(0)
+        self._pay(gl.message.sender_address, amount)
 
     def _pay(self, to: Address, value: u256) -> None:
         if value > u256(0):
@@ -253,17 +362,34 @@ severity guide:
         return self.platform_fee_bps
 
     @gl.public.view
+    def get_pending_balance(self, addr: str) -> u256:
+        addr_str = self._normalize_address(Address(addr))
+        return self.pending_balance_of[addr_str] if addr_str in self.pending_balance_of else u256(0)
+
+    # Milestone 1: Get report IDs submitted by a hunter
+    @gl.public.view
+    def get_hunter_reports(self, addr: str) -> str:
+        addr_str = self._normalize_address(Address(addr))
+        if addr_str not in self.hunter_index:
+            return "[]"
+        arr = self.hunter_index[addr_str]
+        reports_list = []
+        for i in range(len(arr)):
+            reports_list.append(arr[i])
+        return json.dumps(reports_list)
+
+    @gl.public.view
     def get_bounty(self, bounty_id: str) -> str:
         if not (bounty_id in self.bounty_active_of):
             return "{}"
         data = {
             "bounty_id": bounty_id,
-            "brand": str(self.bounty_brand_of[bounty_id]),
-            "name": self.bounty_name_of[bounty_id],
-            "identity": self.bounty_identity_of[bounty_id],
-            "pool": str(self.bounty_pool_of[bounty_id]),
-            "base_reward": str(self.bounty_base_reward_of[bounty_id]),
-            "active": self.bounty_active_of[bounty_id],
+            "brand": str(self.bounty_brand_of[bounty_id]) if bounty_id in self.bounty_brand_of else "",
+            "name": self.bounty_name_of[bounty_id] if bounty_id in self.bounty_name_of else "",
+            "identity": self.bounty_identity_of[bounty_id] if bounty_id in self.bounty_identity_of else "",
+            "pool": str(self.bounty_pool_of[bounty_id]) if bounty_id in self.bounty_pool_of else "0",
+            "base_reward": str(self.bounty_base_reward_of[bounty_id]) if bounty_id in self.bounty_base_reward_of else "0",
+            "active": self.bounty_active_of[bounty_id] if bounty_id in self.bounty_active_of else False,
         }
         return json.dumps(data)
 
@@ -273,13 +399,13 @@ severity guide:
             return "{}"
         data = {
             "report_id": report_id,
-            "bounty_id": self.report_bounty_of[report_id],
-            "hunter": str(self.report_hunter_of[report_id]),
-            "url": self.report_url_of[report_id],
-            "stake": str(self.report_stake_of[report_id]),
-            "status": self.report_status_of[report_id],
-            "severity": str(self.report_severity_of[report_id]),
-            "payout": str(self.report_payout_of[report_id]),
+            "bounty_id": self.report_bounty_of[report_id] if report_id in self.report_bounty_of else "",
+            "hunter": str(self.report_hunter_of[report_id]) if report_id in self.report_hunter_of else "",
+            "url": self.report_url_of[report_id] if report_id in self.report_url_of else "",
+            "stake": str(self.report_stake_of[report_id]) if report_id in self.report_stake_of else "0",
+            "status": self.report_status_of[report_id] if report_id in self.report_status_of else "",
+            "severity": str(self.report_severity_of[report_id]) if report_id in self.report_severity_of else "0",
+            "payout": str(self.report_payout_of[report_id]) if report_id in self.report_payout_of else "0",
             "verdict": self.report_verdict_of[report_id] if report_id in self.report_verdict_of else "",
         }
         return json.dumps(data)
