@@ -46,6 +46,13 @@ class Contract(gl.Contract):
     # Milestone 2: New storage variables
     report_sources_of: TreeMap[str, str]
 
+    # Milestone 3: New storage variables
+    hunter_reports_submitted: TreeMap[str, u256]
+    hunter_reports_confirmed: TreeMap[str, u256]
+    hunter_reports_rejected: TreeMap[str, u256]
+    hunter_reputation_score: TreeMap[str, u256]
+    hunter_tier: TreeMap[str, str]
+
     def __init__(self):
         self.owner = gl.message.sender_address
         self.platform_fee_bps = u256(250)
@@ -87,6 +94,29 @@ class Contract(gl.Contract):
                     res = w_clean.replace("https://", "").replace("http://", "")
                     return res.split('/')[0]
         return ""
+
+    # Milestone 3: Reputation Calculation Helper
+    def _update_reputation(self, hunter_str: str) -> None:
+        conf = int(self.hunter_reports_confirmed[hunter_str] if hunter_str in self.hunter_reports_confirmed else u256(0))
+        rej = int(self.hunter_reports_rejected[hunter_str] if hunter_str in self.hunter_reports_rejected else u256(0))
+
+        score_raw = conf * 100 - rej * 30
+        if score_raw < 0:
+            score_raw = 0
+        if score_raw > 10000:
+            score_raw = 10000
+
+        score = u256(score_raw)
+        self.hunter_reputation_score[hunter_str] = score
+
+        if score_raw >= 7000:
+            self.hunter_tier[hunter_str] = "DIAMOND"
+        elif score_raw >= 3000:
+            self.hunter_tier[hunter_str] = "GOLD"
+        elif score_raw >= 1000:
+            self.hunter_tier[hunter_str] = "SILVER"
+        else:
+            self.hunter_tier[hunter_str] = "BRONZE"
 
     @gl.public.write
     def set_report_stake(self, amount: u256) -> None:
@@ -166,8 +196,19 @@ class Contract(gl.Contract):
         bounty_active = self.bounty_active_of[bounty_id] if bounty_id in self.bounty_active_of else False
         if not bounty_active:
             raise gl.vm.UserError("Bounty inactive")
-        if gl.message.value < self.report_stake:
-            raise gl.vm.UserError("Insufficient anti-spam stake")
+        
+        hunter_str = self._normalize_address(gl.message.sender_address)
+        tier = self.hunter_tier[hunter_str] if hunter_str in self.hunter_tier else "BRONZE"
+
+        # Gate stake by reputation tier (50% discount for GOLD, 75% for DIAMOND)
+        req_stake = self.report_stake
+        if tier == "GOLD":
+            req_stake = self.report_stake // u256(2)
+        elif tier == "DIAMOND":
+            req_stake = self.report_stake // u256(4)
+
+        if gl.message.value < req_stake:
+            raise gl.vm.UserError("Insufficient anti-spam stake for tier " + tier)
         if len(suspicious_url) < 8:
             raise gl.vm.UserError("URL is too short")
 
@@ -181,8 +222,11 @@ class Contract(gl.Contract):
         self.report_payout_of[report_id] = u256(0)
         
         # Index the report under the hunter
-        hunter_str = self._normalize_address(gl.message.sender_address)
         self.hunter_index.get_or_insert_default(hunter_str).append(report_id)
+
+        # Track submitted report count
+        sub = self.hunter_reports_submitted[hunter_str] if hunter_str in self.hunter_reports_submitted else u256(0)
+        self.hunter_reports_submitted[hunter_str] = sub + u256(1)
         
         self.next_report_id = self.next_report_id + u256(1)
         return report_id
@@ -373,6 +417,7 @@ severity guide:
         severity = u256(severity_raw)
         
         confidence = int(verdict.get("confidence", 100))
+        hunter_str = self._normalize_address(hunter)
 
         if is_scam and severity > u256(0):
             base = self.bounty_base_reward_of[bounty_id] if bounty_id in self.bounty_base_reward_of else u256(0)
@@ -380,7 +425,23 @@ severity guide:
             gross = base * severity // u256(100)
             if gross > pool:
                 gross = pool
+
+            # Milestone 3: apply reputation multiplier boost (+5% GOLD, +10% DIAMOND)
+            # Taken from owner platform fee
             fee = gross * self.platform_fee_bps // u256(10000)
+            
+            hunter_tier = self.hunter_tier[hunter_str] if hunter_str in self.hunter_tier else "BRONZE"
+            boost_bps = u256(0)
+            if hunter_tier == "GOLD":
+                boost_bps = u256(500)  # +5%
+            elif hunter_tier == "DIAMOND":
+                boost_bps = u256(1000) # +10%
+                
+            boost = gross * boost_bps // u256(10000)
+            if boost > fee:
+                boost = fee # Limit boost to platform fee
+                
+            fee = fee - boost
             net = gross - fee
 
             self.bounty_pool_of[bounty_id] = pool - gross
@@ -390,7 +451,6 @@ severity guide:
             self.claimed_of[dedup_key] = True
 
             # Credit payout to hunter pending balance
-            hunter_str = self._normalize_address(hunter)
             owner_str = self._normalize_address(self.owner)
 
             if hunter_str not in self.pending_balance_of:
@@ -406,6 +466,11 @@ severity guide:
             if fee > u256(2**255) or self.pending_balance_of[owner_str] > u256(2**255):
                 raise gl.vm.UserError("overflow guard")
             self.pending_balance_of[owner_str] = self.pending_balance_of[owner_str] + fee
+
+            # Milestone 3: update reputation stats on CONFIRMED
+            conf = self.hunter_reports_confirmed[hunter_str] if hunter_str in self.hunter_reports_confirmed else u256(0)
+            self.hunter_reports_confirmed[hunter_str] = conf + u256(1)
+            self._update_reputation(hunter_str)
         else:
             # If AI is not certain, mark as NEEDS_REVIEW instead of REJECTED
             if confidence < 60:
@@ -422,6 +487,11 @@ severity guide:
                 if pool > u256(2**255) or stake > u256(2**255):
                     raise gl.vm.UserError("overflow guard")
                 self.bounty_pool_of[bounty_id] = pool + stake
+
+                # Milestone 3: update reputation stats on REJECTED
+                rej = self.hunter_reports_rejected[hunter_str] if hunter_str in self.hunter_reports_rejected else u256(0)
+                self.hunter_reports_rejected[hunter_str] = rej + u256(1)
+                self._update_reputation(hunter_str)
 
         return self.report_verdict_of[report_id]
 
@@ -476,6 +546,69 @@ severity guide:
         for i in range(len(arr)):
             reports_list.append(arr[i])
         return json.dumps(reports_list)
+
+    # Milestone 3: Get hunter profile details
+    @gl.public.view
+    def get_hunter_profile(self, addr: str) -> str:
+        hunter_str = self._normalize_address(Address(addr))
+        sub = int(self.hunter_reports_submitted[hunter_str] if hunter_str in self.hunter_reports_submitted else u256(0))
+        conf = int(self.hunter_reports_confirmed[hunter_str] if hunter_str in self.hunter_reports_confirmed else u256(0))
+        rej = int(self.hunter_reports_rejected[hunter_str] if hunter_str in self.hunter_reports_rejected else u256(0))
+        score = int(self.hunter_reputation_score[hunter_str] if hunter_str in self.hunter_reputation_score else u256(0))
+        tier = self.hunter_tier[hunter_str] if hunter_str in self.hunter_tier else "BRONZE"
+        
+        total_finalized = conf + rej
+        accuracy = 0
+        if total_finalized > 0:
+            accuracy = int(conf * 100 // total_finalized)
+            
+        data = {
+            "score": score,
+            "tier": tier,
+            "submitted": sub,
+            "confirmed": conf,
+            "rejected": rej,
+            "accuracy_pct": accuracy
+        }
+        return json.dumps(data)
+
+    # Milestone 3: Get top 10 hunters leaderboard
+    @gl.public.view
+    def get_leaderboard_top10(self) -> str:
+        hunters_set = []
+        limit = int(self.next_report_id)
+        for i in range(limit):
+            r_id = str(i)
+            if r_id in self.report_hunter_of:
+                h_addr = self._normalize_address(self.report_hunter_of[r_id])
+                if h_addr not in hunters_set:
+                    hunters_set.append(h_addr)
+                    
+        leaderboard = []
+        for h_addr in hunters_set:
+            sub = int(self.hunter_reports_submitted[h_addr] if h_addr in self.hunter_reports_submitted else u256(0))
+            conf = int(self.hunter_reports_confirmed[h_addr] if h_addr in self.hunter_reports_confirmed else u256(0))
+            rej = int(self.hunter_reports_rejected[h_addr] if h_addr in self.hunter_reports_rejected else u256(0))
+            score = int(self.hunter_reputation_score[h_addr] if h_addr in self.hunter_reputation_score else u256(0))
+            tier = self.hunter_tier[h_addr] if h_addr in self.hunter_tier else "BRONZE"
+            
+            total_finalized = conf + rej
+            accuracy = 0
+            if total_finalized > 0:
+                accuracy = int(conf * 100 // total_finalized)
+                
+            leaderboard.append({
+                "address": h_addr,
+                "score": score,
+                "tier": tier,
+                "submitted": sub,
+                "confirmed": conf,
+                "rejected": rej,
+                "accuracy_pct": accuracy
+            })
+            
+        leaderboard.sort(key=lambda x: x["score"], reverse=True)
+        return json.dumps(leaderboard[:10])
 
     @gl.public.view
     def get_bounty(self, bounty_id: str) -> str:

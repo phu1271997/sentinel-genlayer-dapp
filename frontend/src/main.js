@@ -14,6 +14,8 @@ import {
   withdraw,
   claimEarnings,
   getPendingBalance,
+  getLeaderboard,
+  getHunterProfile,
 } from "./genlayer.js";
 
 const app = document.querySelector("#app");
@@ -24,6 +26,8 @@ const state = {
   reports: [],
   reportStake: 0n,
   pendingBalance: 0n,
+  leaderboard: [],
+  hunterProfile: { score: 0, tier: "BRONZE", submitted: 0, confirmed: 0, rejected: 0, accuracy_pct: 0 },
   selectedBounty: "",
   selectedReport: "",
   busy: "",
@@ -109,11 +113,13 @@ async function run(label, action) {
 async function refreshData() {
   if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") return;
   const address = getAccountAddress();
-  const [bountyTotal, reportTotal, stake, pendingBal] = await Promise.all([
+  const [bountyTotal, reportTotal, stake, pendingBal, leaderboard, profile] = await Promise.all([
     bountyCount(),
     reportCount(),
     getReportStake(),
     getPendingBalance(address).catch(() => 0n),
+    getLeaderboard().catch(() => []),
+    getHunterProfile(address).catch(() => ({ score: 0, tier: "BRONZE", submitted: 0, confirmed: 0, rejected: 0, accuracy_pct: 0 })),
   ]);
   const bountyIds = Array.from({ length: Number(bountyTotal) }, (_, index) => String(index));
   const reportIds = Array.from({ length: Number(reportTotal) }, (_, index) => String(index));
@@ -125,6 +131,8 @@ async function refreshData() {
   state.reports = reports.filter((item) => item && item.report_id !== undefined);
   state.reportStake = stake;
   state.pendingBalance = pendingBal;
+  state.leaderboard = leaderboard || [];
+  state.hunterProfile = profile || { score: 0, tier: "BRONZE", submitted: 0, confirmed: 0, rejected: 0, accuracy_pct: 0 };
   if (!state.selectedBounty && state.bounties.length) state.selectedBounty = state.bounties[0].bounty_id;
 }
 
@@ -148,7 +156,7 @@ function shell(content) {
             : ""
         }
         <div class="account">
-          <span>Operator</span>
+          <span>Operator [${state.hunterProfile.tier} — ${state.hunterProfile.score} pts]</span>
           <strong>${escapeHtml(getAccountAddress())}</strong>
         </div>
       </div>
@@ -157,6 +165,7 @@ function shell(content) {
       ${tabButton("brand", "Brand Console")}
       ${tabButton("hunter", "Hunter Console")}
       ${tabButton("investigate", "Investigate")}
+      ${tabButton("leaderboard", "Leaderboard")}
     </nav>
     ${contractWarning()}
     ${state.busy ? `<div class="banner pulse">${escapeHtml(state.busy)}</div>` : ""}
@@ -441,9 +450,109 @@ function emptyState(message) {
   return `<div class="empty">${escapeHtml(message)}</div>`;
 }
 
+function leaderboardTable(leaderboard) {
+  if (!leaderboard || !leaderboard.length) return emptyState("No hunters on the leaderboard yet.");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Hunter Address</th>
+            <th>Reputation Score</th>
+            <th>Tier</th>
+            <th>Accuracy</th>
+            <th>Outcome (Conf/Rej)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${leaderboard
+            .map((h, i) => {
+              const currentAddress = getAccountAddress();
+              const isMe = h.address.toLowerCase() === currentAddress.toLowerCase();
+              const rank = i + 1;
+              let rankText = `#${rank}`;
+              if (rank === 1) rankText = "🥇 #1";
+              else if (rank === 2) rankText = "🥈 #2";
+              else if (rank === 3) rankText = "🥉 #3";
+              
+              return `
+                <tr class="${isMe ? "active-row" : ""}">
+                  <td><strong>${rankText}</strong></td>
+                  <td><code>${escapeHtml(h.address)}</code> ${isMe ? '<span class="me-tag">(You)</span>' : ""}</td>
+                  <td><strong>${h.score} pts</strong></td>
+                  <td><span class="badge badge-${h.tier.toLowerCase()}">${escapeHtml(h.tier)}</span></td>
+                  <td>${h.accuracy_pct}%</td>
+                  <td>${h.confirmed} / ${h.rejected}</td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function leaderboardView() {
+  const profile = state.hunterProfile;
+  const currentAddress = getAccountAddress();
+  
+  let tierInfo = "";
+  if (profile.tier === "BRONZE") {
+    tierInfo = "BRONZE Tier: standard 100% stake required. Earn points to level up!";
+  } else if (profile.tier === "SILVER") {
+    tierInfo = "SILVER Tier (threshold &gt;= 1000): standard 100% stake required. Earn points to reach GOLD!";
+  } else if (profile.tier === "GOLD") {
+    tierInfo = "GOLD Tier (threshold &gt;= 3000): <strong>50% stake discount</strong> & payout fee deductions fully waived!";
+  } else if (profile.tier === "DIAMOND") {
+    tierInfo = "DIAMOND Tier (threshold &gt;= 10000): <strong>75% stake discount</strong> & payout fee deductions fully waived!";
+  }
+  
+  return shell(`
+    <section class="grid hunter-grid">
+      <div class="panel">
+        <div class="panel-title">
+          <span class="signal blue"></span>
+          <h2>My Reputation</h2>
+        </div>
+        <div class="profile-card">
+          <div class="profile-tier-badge badge-${profile.tier.toLowerCase()}">${escapeHtml(profile.tier)}</div>
+          <div class="profile-stat">
+            <span>Reputation Score</span>
+            <strong>${profile.score} pts</strong>
+          </div>
+          <div class="profile-stat">
+            <span>Accuracy Rate</span>
+            <strong>${profile.accuracy_pct}%</strong>
+          </div>
+          <div class="profile-stat">
+            <span>Submitted Reports</span>
+            <strong>${profile.submitted} total</strong>
+          </div>
+          <div class="profile-stat-sub">
+            <span>Confirmed: ${profile.confirmed} &bull; Rejected: ${profile.rejected}</span>
+          </div>
+          <p class="hint">${tierInfo}</p>
+        </div>
+      </div>
+      
+      <section class="section-block" style="margin-top: 0;">
+        <div class="section-heading" style="margin-bottom: 18px;">
+          <h2>Top 10 Hunters Leaderboard</h2>
+          <button class="icon-button" id="refreshButton" type="button" title="Refresh">Refresh</button>
+        </div>
+        ${leaderboardTable(state.leaderboard)}
+      </section>
+    </section>
+  `);
+}
+
+
 function render() {
   if (state.activeView === "hunter") app.innerHTML = hunterView();
   else if (state.activeView === "investigate") app.innerHTML = investigateView();
+  else if (state.activeView === "leaderboard") app.innerHTML = leaderboardView();
   else app.innerHTML = brandView();
 }
 

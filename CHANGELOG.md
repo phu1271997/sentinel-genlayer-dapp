@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [v2.M3] — Hunter Reputation System — 2026-06-20
+### Added
+- Created a robust reputation system tracking submissions, confirmation, rejection metrics, score, and tier.
+- Tier progression: `BRONZE` (0-999), `SILVER` (1000-2999), `GOLD` (3000-9999), and `DIAMOND` (10000+).
+- Economic incentives: GOLD and DIAMOND get stake discounts (50% and 75% respectively) on report submissions.
+- Payout boosts: waive platform fee deductions for GOLD and DIAMOND tiers (incentive bonus capped at reward value).
+- Public view methods: `get_hunter_profile` and `get_leaderboard_top10` returning JSON strings for UI.
+- Pytest coverage: unit tests in `tests/test_reputation.py` verifying tier upgrades, fee waiver payouts, and stake discounts.
+- Frontend Leaderboard console: displays rank, address, score, tier badge, accuracy rating, and stats, plus active user profile summary.
+
+### Evidence
+- Pytest execution: 9/9 tests passed.
+- Reputation mechanics and economic parameters detailed in `docs/REPUTATION.md` and evidence in `docs/evidence/m3/evidence.md`.
+
 ## [v2.M2] — AI Consensus Upgrade — 2026-06-20
 ### Added
 - Integrated `gl.eq_principle.prompt_comparative` consensus model using a strict semantic comparison principle.

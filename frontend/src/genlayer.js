@@ -67,3 +67,5 @@ export const bountyCount = async () => BigInt(await read("get_bounty_count"));
 export const reportCount = async () => BigInt(await read("get_report_count"));
 export const getReportStake = async () => BigInt(await read("get_report_stake"));
 export const getPendingBalance = async (addr) => BigInt(await read("get_pending_balance", [addr]));
+export const getLeaderboard = async () => parseJsonResult(await read("get_leaderboard_top10"));
+export const getHunterProfile = async (addr) => parseJsonResult(await read("get_hunter_profile", [addr]));
