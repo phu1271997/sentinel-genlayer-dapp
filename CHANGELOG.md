@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [v2.M2] — AI Consensus Upgrade — 2026-06-20
+### Added
+- Integrated `gl.eq_principle.prompt_comparative` consensus model using a strict semantic comparison principle.
+- Multi-source rendering gathering DOM text from suspect URL, Wayback, urlscan.io, VirusTotal, and official Brand Truth.
+- Multi-perspective prompting acting as Forensic Analyst, Skeptical User, and Brand Lawyer.
+- Added confidence gating: reports with confidence < 60 transition to `NEEDS_REVIEW` and retain stakes, unlocking appeal paths.
+- Added `report_sources_of` TreeMap to record which URLs were queried during consensus.
+- Automated consensus test suite `tests/test_consensus.py` verifying domain extraction, confidence gating, and status transitions.
+- Frontend details expansion: collapsible perspectives panel, confidence meter bar, and source list links in Verdict Card.
+
+### Evidence
+- Pytest execution: 8/8 tests passed in 0.11s.
+- Detailed architecture documented in `docs/AI_CONSENSUS.md`.
+
 ## [v2.M1] — Security Hardening Bundle v1 — 2026-06-20
 ### Added
 - Deterministic prompt injection canary tokens generated from block context to prevent LLM instructions hijacking.
