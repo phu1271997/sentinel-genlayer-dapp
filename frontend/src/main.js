@@ -63,6 +63,7 @@ function escapeHtml(value) {
 function statusClass(status) {
   if (status === "CONFIRMED") return "danger";
   if (status === "REJECTED") return "clear";
+  if (status === "NEEDS_REVIEW") return "warning";
   return "pending";
 }
 
@@ -355,6 +356,61 @@ function bountyCard(bounty) {
 function verdictCard(report) {
   const verdict = parseVerdict(report);
   const severity = Number(report.severity || verdict.severity || 0);
+  const confidence = Number(verdict.confidence || 0);
+  const perspectives = verdict.perspectives || {};
+
+  let perspectivesHtml = "";
+  if (perspectives.forensic || perspectives.skeptic || perspectives.legal) {
+    perspectivesHtml = `
+      <div class="perspectives">
+        <details class="perspective">
+          <summary>Forensic Analyst Perspective</summary>
+          <p>${escapeHtml(perspectives.forensic || "No analysis available.")}</p>
+        </details>
+        <details class="perspective">
+          <summary>Skeptical User Perspective</summary>
+          <p>${escapeHtml(perspectives.skeptic || "No analysis available.")}</p>
+        </details>
+        <details class="perspective">
+          <summary>Brand Lawyer Perspective</summary>
+          <p>${escapeHtml(perspectives.legal || "No analysis available.")}</p>
+        </details>
+      </div>
+    `;
+  }
+
+  let confidenceHtml = "";
+  if (verdict.confidence !== undefined) {
+    confidenceHtml = `
+      <div class="confidence-meter" title="AI Consensus Confidence">
+        <span>Confidence</span>
+        <div class="confidence-bar">
+          <div class="confidence-fill" style="width: ${confidence}%"></div>
+        </div>
+        <strong>${confidence}%</strong>
+      </div>
+    `;
+  }
+
+  let sourcesListHtml = "";
+  if (report.sources) {
+    try {
+      const sources = JSON.parse(report.sources);
+      if (sources && sources.length > 0) {
+        sourcesListHtml = `
+          <div class="sources-list">
+            <span>Cross-referenced Sources (${sources.length})</span>
+            <ul>
+              ${sources.map(src => `<li><a href="${escapeHtml(src)}" target="_blank" rel="noopener noreferrer">${escapeHtml(src)}</a></li>`).join("")}
+            </ul>
+          </div>
+        `;
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+
   return `
     <article class="verdict">
       <div class="verdict-head">
@@ -372,8 +428,11 @@ function verdictCard(report) {
         <div><span>Type</span><strong>${escapeHtml(verdict.scam_type || "pending")}</strong></div>
         <div><span>Payout</span><strong>${formatWei(report.payout)}</strong></div>
       </div>
+      ${confidenceHtml}
       <p class="reasoning">${escapeHtml(verdict.reasoning || "Awaiting investigation.")}</p>
+      ${perspectivesHtml}
       <div class="inert-url"><span>Suspect URL</span><code>${escapeHtml(report.url)}</code></div>
+      ${sourcesListHtml}
     </article>
   `;
 }
