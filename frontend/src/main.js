@@ -12,6 +12,8 @@ import {
   submitReport,
   topUp,
   withdraw,
+  claimEarnings,
+  getPendingBalance,
 } from "./genlayer.js";
 
 const app = document.querySelector("#app");
@@ -21,6 +23,7 @@ const state = {
   bounties: [],
   reports: [],
   reportStake: 0n,
+  pendingBalance: 0n,
   selectedBounty: "",
   selectedReport: "",
   busy: "",
@@ -104,7 +107,13 @@ async function run(label, action) {
 
 async function refreshData() {
   if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") return;
-  const [bountyTotal, reportTotal, stake] = await Promise.all([bountyCount(), reportCount(), getReportStake()]);
+  const address = getAccountAddress();
+  const [bountyTotal, reportTotal, stake, pendingBal] = await Promise.all([
+    bountyCount(),
+    reportCount(),
+    getReportStake(),
+    getPendingBalance(address).catch(() => 0n),
+  ]);
   const bountyIds = Array.from({ length: Number(bountyTotal) }, (_, index) => String(index));
   const reportIds = Array.from({ length: Number(reportTotal) }, (_, index) => String(index));
   const [bounties, reports] = await Promise.all([
@@ -114,19 +123,33 @@ async function refreshData() {
   state.bounties = bounties.filter((item) => item && item.bounty_id !== undefined);
   state.reports = reports.filter((item) => item && item.report_id !== undefined);
   state.reportStake = stake;
+  state.pendingBalance = pendingBal;
   if (!state.selectedBounty && state.bounties.length) state.selectedBounty = state.bounties[0].bounty_id;
 }
 
 function shell(content) {
+  const showClaim = state.pendingBalance > 0n;
   return `
     <header class="topbar">
       <div>
         <p class="eyebrow">GenLayer Intelligent Contract dApp</p>
         <h1>Sentinel</h1>
       </div>
-      <div class="account">
-        <span>Operator</span>
-        <strong>${escapeHtml(getAccountAddress())}</strong>
+      <div class="account-actions">
+        ${
+          showClaim
+            ? `
+            <div class="claim-panel">
+              <span>Earnings: <strong>${formatWei(state.pendingBalance)}</strong></span>
+              <button class="primary claim-btn" id="claimEarningsBtn">Claim</button>
+            </div>
+            `
+            : ""
+        }
+        <div class="account">
+          <span>Operator</span>
+          <strong>${escapeHtml(getAccountAddress())}</strong>
+        </div>
       </div>
     </header>
     <nav class="tabs" aria-label="Sentinel consoles">
@@ -385,6 +408,12 @@ function bindEvents() {
     if (event.target.closest("#refreshButton")) {
       run("Refreshing on-chain state...", async () => {
         await refreshData();
+      });
+    }
+
+    if (event.target.closest("#claimEarningsBtn")) {
+      run("Claiming pending earnings...", async () => {
+        await claimEarnings();
       });
     }
   });

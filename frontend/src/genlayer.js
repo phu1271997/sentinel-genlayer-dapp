@@ -59,9 +59,11 @@ export const topUp = (id, fundWei) => write("top_up_bounty", [id], BigInt(fundWe
 export const submitReport = (id, url, stakeWei) => write("submit_report", [id, url], BigInt(stakeWei));
 export const evaluate = (reportId) => write("evaluate_report", [reportId]);
 export const withdraw = (id) => write("deactivate_and_withdraw", [id]);
+export const claimEarnings = () => write("withdraw", []);
 
 export const getBounty = async (id) => parseJsonResult(await read("get_bounty", [id]));
 export const getReport = async (id) => parseJsonResult(await read("get_report", [id]));
 export const bountyCount = async () => BigInt(await read("get_bounty_count"));
 export const reportCount = async () => BigInt(await read("get_report_count"));
 export const getReportStake = async () => BigInt(await read("get_report_stake"));
+export const getPendingBalance = async (addr) => BigInt(await read("get_pending_balance", [addr]));
