@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [v2.M5] — Demo Mode & Sample Data Seeding — 2026-06-20
+### Added
+- Created `scripts/seed_demo.js` to programmatically seed the deployed contract on localnet/studionet.
+- Implemented **Demo Mode** triggerable via `?demo=1` or `?demo=true` URL parameters.
+- Implemented in-memory simulation for all smart contract interactions when Demo Mode is active.
+- Added a floating "Demo Mode Active" warning banner at the top of the viewport.
+- Created an interactive 5-step onboarding wizard/tour to guide users through the consoles, storing state in `localStorage` to avoid repeating.
+- Enhanced empty-state views for tables and logs with supportive helper text.
+
+### Evidence
+- ESM script validation and clean production compilation checked.
+- Evidence log details written to `docs/evidence/m5/evidence.md`.
+
 ## [v2.M4] — Appeal & Re-Evaluation Flow — 2026-06-20
 ### Added
 - Implemented dispute resolution system allowing hunters to appeal negative verdicts (`REJECTED` or `NEEDS_REVIEW`).

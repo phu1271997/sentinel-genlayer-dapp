@@ -9,8 +9,8 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "genlayer-js": "^0.18.3",
     "vite": "^6.0.0"
-  },
-  "devDependencies": {}
+  }
 }
