@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [v2.M6] — Documentation Overhaul & CI test suite — 2026-06-20
+### Added
+- Created `docs/ARCHITECTURE.md` detailing Sentinel component topology and sequence flows (Bounty Reporting, AI Consensus, and Appeal Flow) using Mermaid.
+- Created `docs/ECONOMICS.md` outlining dynamic stake gating, reputation-tier discounts, platform fees, and fee waiver/boost math with LaTeX formulas.
+- Created `docs/CONTRIBUTING.md` defining Prerequisites, Local setup steps, Test execution, and Demo Mode guidelines.
+- Created bilingual Vietnamese `README.vi.md` to support local developers.
+- Integrated GitHub Actions CI workflow under `.github/workflows/test.yml` running Python unit tests and frontend production builds.
+- Generated contract reference API documentation under `docs/api/` using `pdoc` and a custom mock GenLayer environment.
+
+### Evidence
+- Generated HTML docs verified and CI workflow tested.
+- Evidence logs recorded in `docs/evidence/m6/evidence.md`.
+
 ## [v2.M5] — Demo Mode & Sample Data Seeding — 2026-06-20
 ### Added
 - Created `scripts/seed_demo.js` to programmatically seed the deployed contract on localnet/studionet.

@@ -121,6 +121,8 @@ List of completed upgrades and tagged releases for the GenLayer Builder Program:
 - **[v2.M3] — Hunter Reputation System** (2026-06-20): Added on-chain hunter statistics, score computation, progression tiers (Bronze to Diamond), stake discount gating (up to 75% off), platform fee waiver boosts, top 10 leaderboard, and active user stats console in the frontend. [Changelog](CHANGELOG.md#v2m3-hunter-reputation-system-2026-06-20)
 - **[v2.M4] — Appeal & Re-Evaluation Flow** (2026-06-20): Implemented the dispute resolution system with appeal deposits, re-evaluation consensus loops, overturned and upheld payout dynamics, dynamic reputation corrections, and full frontend UI controls (appeal forms, logs, and inline card buttons). [Changelog](CHANGELOG.md#v2m4-appeal--re-evaluation-flow-2026-06-20)
 - **[v2.M5] — Demo Mode & Sample Data Seeding** (2026-06-20): Added ESM database seeding script, interactive 5-step onboarding guide wizard, full in-memory operations simulation for localnet bypass, and floating warning banner indicator. [Changelog](CHANGELOG.md#v2m5-demo-mode--sample-data-seeding-2026-06-20)
+- **[v2.M6] — Documentation Overhaul & CI test suite** (2026-06-20): Added ARCHITECTURE.md (Mermaid topology/sequences), ECONOMICS.md (LaTeX models), CONTRIBUTING.md (setup instructions), bilingual Vietnamese README.vi.md, pdoc API contract docs, and GitHub Actions test workflow CI. [Changelog](CHANGELOG.md#v2m6-documentation-overhaul--ci-test-suite-2026-06-20)
+
 
 
 
