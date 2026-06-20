@@ -15,6 +15,22 @@
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+body[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --panel: #ffffff;
+  --panel-2: #f1f5f9;
+  --line: #cbd5e1;
+  --text: #0f172a;
+  --muted: #64748b;
+  --green: #10b981;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --shadow: rgba(0, 0, 0, 0.08);
+}
+
+
 * {
   box-sizing: border-box;
 }
@@ -819,5 +835,132 @@ dd {
   from { transform: translateY(20px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* Toast System */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1100;
+  max-width: 380px;
+  width: calc(100% - 48px);
+}
+
+.toast {
+  padding: 12px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 8px 30px var(--shadow);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  color: var(--text);
+}
+
+.toast.success {
+  border-color: rgba(40, 209, 124, 0.45);
+  background: rgba(40, 209, 124, 0.05);
+}
+
+.toast.success span {
+  color: var(--green);
+}
+
+.toast.error {
+  border-color: rgba(255, 79, 109, 0.45);
+  background: rgba(255, 79, 109, 0.05);
+}
+
+.toast.error span {
+  color: var(--red);
+}
+
+.toast.info {
+  border-color: rgba(85, 167, 255, 0.45);
+  background: rgba(85, 167, 255, 0.05);
+}
+
+.toast.info span {
+  color: var(--blue);
+}
+
+@keyframes slideIn {
+  from { transform: translateY(100px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Mobile Collapsing Tables */
+@media (max-width: 768px) {
+  .table-wrap {
+    border: none;
+    background: transparent;
+  }
+  
+  table {
+    min-width: unset;
+    background: transparent;
+    display: block;
+  }
+  
+  thead {
+    display: none;
+  }
+  
+  tbody {
+    display: block;
+    width: 100%;
+  }
+  
+  tr {
+    display: block;
+    margin-bottom: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    padding: 12px 16px;
+    box-shadow: 0 4px 12px var(--shadow);
+  }
+  
+  td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+    padding: 10px 0;
+    text-align: right;
+    width: 100%;
+  }
+  
+  td:last-child {
+    border-bottom: none;
+  }
+  
+  td::before {
+    content: attr(data-label);
+    font-weight: 700;
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    text-align: left;
+    margin-right: 12px;
+  }
+  
+  td strong, td code {
+    text-align: right;
+    display: inline-block;
+  }
+  
+  td span {
+    margin-top: 0;
+    display: inline-block;
+  }
+}
+
 
 
