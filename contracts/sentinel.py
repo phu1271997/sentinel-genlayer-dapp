@@ -53,12 +53,21 @@ class Contract(gl.Contract):
     hunter_reputation_score: TreeMap[str, u256]
     hunter_tier: TreeMap[str, str]
 
+    # Milestone 4: New storage variables
+    next_appeal_id: u256
+    appeal_report_of: TreeMap[str, str]
+    appeal_status_of: TreeMap[str, str]
+    appeal_original_status_of: TreeMap[str, str]
+    appeal_fee_of: TreeMap[str, u256]
+    appeal_verdict_of: TreeMap[str, str]
+
     def __init__(self):
         self.owner = gl.message.sender_address
         self.platform_fee_bps = u256(250)
         self.report_stake = u256(0)
         self.next_bounty_id = u256(0)
         self.next_report_id = u256(0)
+        self.next_appeal_id = u256(0)
 
     # Helper to normalize addresses to lowercase hex strings
     def _normalize_address(self, addr: Address) -> str:
@@ -642,3 +651,281 @@ severity guide:
             "sources": self.report_sources_of[report_id] if report_id in self.report_sources_of else "[]",
         }
         return json.dumps(data)
+
+    @gl.public.write.payable
+    def file_appeal(self, report_id: str) -> str:
+        if not (report_id in self.report_status_of):
+            raise gl.vm.UserError("Unknown report")
+        
+        hunter = self.report_hunter_of[report_id] if report_id in self.report_hunter_of else Address("0x0000000000000000000000000000000000000000")
+        if self._normalize_address(gl.message.sender_address) != self._normalize_address(hunter):
+            raise gl.vm.UserError("Only the hunter who submitted the report can appeal")
+            
+        status = self.report_status_of[report_id] if report_id in self.report_status_of else ""
+        if status != "REJECTED" and status != "NEEDS_REVIEW":
+            raise gl.vm.UserError("Report is not eligible for appeal")
+            
+        stake = self.report_stake_of[report_id] if report_id in self.report_stake_of else u256(0)
+        if gl.message.value != stake:
+            raise gl.vm.UserError("Appeal fee must be exactly equal to the original report stake")
+            
+        appeal_id = str(self.next_appeal_id)
+        self.appeal_report_of[appeal_id] = report_id
+        self.appeal_status_of[appeal_id] = "PENDING"
+        self.appeal_original_status_of[appeal_id] = status
+        self.appeal_fee_of[appeal_id] = gl.message.value
+        
+        self.report_status_of[report_id] = "APPEALED"
+        
+        self.next_appeal_id = self.next_appeal_id + u256(1)
+        return appeal_id
+
+    @gl.public.write
+    def evaluate_appeal(self, appeal_id: str) -> str:
+        if not (appeal_id in self.appeal_status_of):
+            raise gl.vm.UserError("Unknown appeal")
+        if self.appeal_status_of[appeal_id] != "PENDING":
+            raise gl.vm.UserError("Appeal already evaluated")
+            
+        report_id = self.appeal_report_of[appeal_id]
+        bounty_id = self.report_bounty_of[report_id] if report_id in self.report_bounty_of else ""
+        hunter = self.report_hunter_of[report_id] if report_id in self.report_hunter_of else Address("0x0000000000000000000000000000000000000000")
+        stake = self.report_stake_of[report_id] if report_id in self.report_stake_of else u256(0)
+        url = self.report_url_of[report_id] if report_id in self.report_url_of else ""
+        brand_name = self.bounty_name_of[bounty_id] if bounty_id in self.bounty_name_of else ""
+        identity = self.bounty_identity_of[bounty_id] if bounty_id in self.bounty_identity_of else ""
+        appeal_fee = self.appeal_fee_of[appeal_id] if appeal_id in self.appeal_fee_of else u256(0)
+        original_status = self.appeal_original_status_of[appeal_id] if appeal_id in self.appeal_original_status_of else ""
+        
+        temp_url = url.replace("https://", "").replace("http://", "")
+        host = temp_url.split('/')[0].split('?')[0].split(':')[0]
+        canonical_domain = self._extract_domain(identity)
+
+        # Deterministic canary token derived from block context
+        dt_str = gl.message_raw.get('datetime', '')
+        token_input = f"appeal:{appeal_id}:{dt_str}"
+        canary = hashlib.sha256(token_input.encode('utf-8')).hexdigest()[:8]
+
+        def leader_fn() -> str:
+            sources = []
+            
+            # 1. Suspect URL (existing)
+            try:
+                suspect_text = gl.nondet.web.render(url, mode="text")
+                sources.append({"name": "Suspect URL Text", "url": url, "text": suspect_text[:1500]})
+            except Exception:
+                pass
+                
+            # 2. Wayback Archive
+            try:
+                wayback_url = f"https://web.archive.org/web/2025/{url}"
+                wayback_text = gl.nondet.web.render(wayback_url, mode="text")
+                sources.append({"name": "Wayback Archive", "url": wayback_url, "text": wayback_text[:1500]})
+            except Exception:
+                pass
+                
+            # 3. urlscan.io
+            try:
+                urlscan_url = f"https://urlscan.io/search/#page.url:%22{host}%22"
+                urlscan_text = gl.nondet.web.render(urlscan_url, mode="text")
+                sources.append({"name": "urlscan.io Search", "url": urlscan_url, "text": urlscan_text[:1500]})
+            except Exception:
+                pass
+                
+            # 4. VirusTotal
+            try:
+                vt_url = f"https://www.virustotal.com/gui/domain/{host}"
+                vt_text = gl.nondet.web.render(vt_url, mode="text")
+                sources.append({"name": "VirusTotal Domain Report", "url": vt_url, "text": vt_text[:1500]})
+            except Exception:
+                pass
+                
+            # 5. Brand Truth website rendering
+            if canonical_domain:
+                try:
+                    brand_truth_url = f"https://{canonical_domain}"
+                    brand_truth_text = gl.nondet.web.render(brand_truth_url, mode="text")
+                    sources.append({"name": "Official Brand Website", "url": brand_truth_url, "text": brand_truth_text[:1500]})
+                except Exception:
+                    pass
+
+            sources_formatted = ""
+            for s in sources:
+                sources_formatted += f"--- SOURCE: {s['name']} ({s['url']}) ---\n{s['text']}\n\n"
+
+            shot = gl.nondet.web.render(url, mode="screenshot")
+            prompt = f"""You are a senior brand-protection analyst reviewing an APPEALED verdict for a suspicious scam URL.
+A hunter has contested the previous negative outcome and paid a dispute fee. Be extremely thorough.
+
+OFFICIAL BRAND: {brand_name}
+OFFICIAL IDENTITY (legitimate domains, handles, how the real brand looks):
+{identity}
+
+We have retrieved the following cross-referenced web sources for the SUSPECT URL: {url}
+{sources_formatted}
+
+You also have a screenshot of the suspect page.
+
+Decide if the suspect page impersonates / phishes / scams the official brand.
+NEVER flag the brand's own official properties as a scam.
+
+CRITICAL SECURITY REQUIREMENT:
+You MUST echo the security canary token {canary} in your response under the key "canary".
+
+Perform a detailed evaluation from three distinct perspectives:
+1. Forensic Analyst: Analyze HTML/text artifacts, hosting details, and domain reputation.
+2. Skeptical User: Look at visual elements, branding, and UX red flags (e.g. pressure tactics, spelling errors).
+3. Brand-Protection Lawyer: Evaluate trademark usage, logo abuse, and impersonation.
+
+Respond with ONLY valid JSON:
+{{
+  "canary": "{canary}",
+  "is_scam": true or false,
+  "scam_type": "phishing | impersonation | counterfeit | fake_giveaway | fake_support | wallet_drainer | other | none",
+  "severity": <integer 0-100>,
+  "confidence": <integer 0-100>,
+  "reasoning": "one short paragraph citing concrete evidence",
+  "perspectives": {{
+    "forensic": "forensic analyst verdict and findings",
+    "skeptic": "skeptical user visual/UX findings",
+    "legal": "brand lawyer trademark/impersonation findings"
+  }}
+}}
+"""
+            res = gl.nondet.exec_prompt(prompt, images=[shot], response_format="json")
+            return json.dumps({"verdict": res}, sort_keys=True)
+
+        principle = (
+            "Compare the 'verdict' object inside the JSON payload. "
+            "Two verdicts agree if and only if: "
+            "(a) is_scam booleans are identical, "
+            "(b) scam_type buckets match (phishing/impersonation/counterfeit/"
+            "fake_giveaway/fake_support/wallet_drainer/other/none), "
+            "(c) severity values are within \u00b115."
+        )
+
+        ruling_str = gl.eq_principle.prompt_comparative(leader_fn, principle)
+        ruling = json.loads(ruling_str)
+        verdict = ruling["verdict"]
+
+        if verdict.get("canary") != canary:
+            raise gl.vm.UserError("Canary token mismatch")
+
+        self.appeal_verdict_of[appeal_id] = json.dumps(verdict, sort_keys=True)
+
+        is_scam = bool(verdict.get("is_scam"))
+        severity_raw = int(verdict.get("severity", 0))
+        if severity_raw < 0:
+            severity_raw = 0
+        if severity_raw > 100:
+            severity_raw = 100
+        severity = u256(severity_raw)
+
+        hunter_str = self._normalize_address(hunter)
+        owner_str = self._normalize_address(self.owner)
+
+        if is_scam and severity > u256(0):
+            base = self.bounty_base_reward_of[bounty_id] if bounty_id in self.bounty_base_reward_of else u256(0)
+            pool = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
+            gross = base * severity // u256(100)
+            if gross > pool:
+                gross = pool
+
+            fee = gross * self.platform_fee_bps // u256(10000)
+            hunter_tier = self.hunter_tier[hunter_str] if hunter_str in self.hunter_tier else "BRONZE"
+            boost_bps = u256(0)
+            if hunter_tier == "GOLD":
+                boost_bps = u256(500)
+            elif hunter_tier == "DIAMOND":
+                boost_bps = u256(1000)
+                
+            boost = gross * boost_bps // u256(10000)
+            if boost > fee:
+                boost = fee
+                
+            fee = fee - boost
+            net = gross - fee
+
+            pool_reduction = gross
+            if original_status == "REJECTED":
+                pool_reduction = pool_reduction + stake
+            
+            if pool_reduction > pool:
+                pool_reduction = pool
+            self.bounty_pool_of[bounty_id] = pool - pool_reduction
+
+            self.report_severity_of[report_id] = severity
+            self.report_payout_of[report_id] = net
+            self.report_status_of[report_id] = "CONFIRMED"
+            self.appeal_status_of[appeal_id] = "OVERTURNED"
+
+            # Credit hunter: net + original stake + appeal fee
+            if hunter_str not in self.pending_balance_of:
+                self.pending_balance_of[hunter_str] = u256(0)
+            if owner_str not in self.pending_balance_of:
+                self.pending_balance_of[owner_str] = u256(0)
+
+            payout_hunter = net + stake + appeal_fee
+            if payout_hunter > u256(2**255) or self.pending_balance_of[hunter_str] > u256(2**255):
+                raise gl.vm.UserError("overflow guard")
+            self.pending_balance_of[hunter_str] = self.pending_balance_of[hunter_str] + payout_hunter
+
+            if fee > u256(2**255) or self.pending_balance_of[owner_str] > u256(2**255):
+                raise gl.vm.UserError("overflow guard")
+            self.pending_balance_of[owner_str] = self.pending_balance_of[owner_str] + fee
+
+            # Reputation Adjustments
+            if original_status == "REJECTED":
+                rej = self.hunter_reports_rejected[hunter_str] if hunter_str in self.hunter_reports_rejected else u256(0)
+                if rej > u256(0):
+                    self.hunter_reports_rejected[hunter_str] = rej - u256(1)
+                conf = self.hunter_reports_confirmed[hunter_str] if hunter_str in self.hunter_reports_confirmed else u256(0)
+                self.hunter_reports_confirmed[hunter_str] = conf + u256(1)
+            elif original_status == "NEEDS_REVIEW":
+                conf = self.hunter_reports_confirmed[hunter_str] if hunter_str in self.hunter_reports_confirmed else u256(0)
+                self.hunter_reports_confirmed[hunter_str] = conf + u256(1)
+
+            self._update_reputation(hunter_str)
+        else:
+            self.report_status_of[report_id] = "REJECTED"
+            self.appeal_status_of[appeal_id] = "UPHELD"
+
+            forfeit_amt = appeal_fee
+            if original_status == "NEEDS_REVIEW":
+                forfeit_amt = forfeit_amt + stake
+
+            pool = self.bounty_pool_of[bounty_id] if bounty_id in self.bounty_pool_of else u256(0)
+            if pool > u256(2**255) or forfeit_amt > u256(2**255):
+                raise gl.vm.UserError("overflow guard")
+            self.bounty_pool_of[bounty_id] = pool + forfeit_amt
+
+            if original_status == "NEEDS_REVIEW":
+                rej = self.hunter_reports_rejected[hunter_str] if hunter_str in self.hunter_reports_rejected else u256(0)
+                self.hunter_reports_rejected[hunter_str] = rej + u256(1)
+                self._update_reputation(hunter_str)
+
+        return self.appeal_verdict_of[appeal_id]
+
+    @gl.public.view
+    def get_appeal(self, appeal_id: str) -> str:
+        if not (appeal_id in self.appeal_status_of):
+            return "{}"
+        report_id = self.appeal_report_of[appeal_id] if appeal_id in self.appeal_report_of else ""
+        data = {
+            "appeal_id": appeal_id,
+            "report_id": report_id,
+            "status": self.appeal_status_of[appeal_id] if appeal_id in self.appeal_status_of else "",
+            "fee": str(self.appeal_fee_of[appeal_id]) if appeal_id in self.appeal_fee_of else "0",
+            "original_status": self.appeal_original_status_of[appeal_id] if appeal_id in self.appeal_original_status_of else "",
+            "verdict": self.appeal_verdict_of[appeal_id] if appeal_id in self.appeal_verdict_of else ""
+        }
+        return json.dumps(data)
+
+    @gl.public.view
+    def get_appeal_verdict(self, appeal_id: str) -> str:
+        return self.appeal_verdict_of[appeal_id] if appeal_id in self.appeal_verdict_of else ""
+
+    @gl.public.view
+    def get_appeal_count(self) -> u256:
+        return self.next_appeal_id
+

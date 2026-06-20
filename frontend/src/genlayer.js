@@ -69,3 +69,8 @@ export const getReportStake = async () => BigInt(await read("get_report_stake"))
 export const getPendingBalance = async (addr) => BigInt(await read("get_pending_balance", [addr]));
 export const getLeaderboard = async () => parseJsonResult(await read("get_leaderboard_top10"));
 export const getHunterProfile = async (addr) => parseJsonResult(await read("get_hunter_profile", [addr]));
+export const fileAppeal = (reportId, feeWei) => write("file_appeal", [reportId], BigInt(feeWei));
+export const evaluateAppeal = (appealId) => write("evaluate_appeal", [appealId]);
+export const getAppeal = async (id) => parseJsonResult(await read("get_appeal", [id]));
+export const getAppealCount = async () => BigInt(await read("get_appeal_count"));
+

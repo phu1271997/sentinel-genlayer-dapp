@@ -16,6 +16,10 @@ import {
   getPendingBalance,
   getLeaderboard,
   getHunterProfile,
+  fileAppeal,
+  evaluateAppeal,
+  getAppeal,
+  getAppealCount,
 } from "./genlayer.js";
 
 const app = document.querySelector("#app");
@@ -28,6 +32,7 @@ const state = {
   pendingBalance: 0n,
   leaderboard: [],
   hunterProfile: { score: 0, tier: "BRONZE", submitted: 0, confirmed: 0, rejected: 0, accuracy_pct: 0 },
+  appeals: [],
   selectedBounty: "",
   selectedReport: "",
   busy: "",
@@ -113,22 +118,26 @@ async function run(label, action) {
 async function refreshData() {
   if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") return;
   const address = getAccountAddress();
-  const [bountyTotal, reportTotal, stake, pendingBal, leaderboard, profile] = await Promise.all([
+  const [bountyTotal, reportTotal, stake, pendingBal, leaderboard, profile, appealTotal] = await Promise.all([
     bountyCount(),
     reportCount(),
     getReportStake(),
     getPendingBalance(address).catch(() => 0n),
     getLeaderboard().catch(() => []),
     getHunterProfile(address).catch(() => ({ score: 0, tier: "BRONZE", submitted: 0, confirmed: 0, rejected: 0, accuracy_pct: 0 })),
+    getAppealCount().catch(() => 0n),
   ]);
   const bountyIds = Array.from({ length: Number(bountyTotal) }, (_, index) => String(index));
   const reportIds = Array.from({ length: Number(reportTotal) }, (_, index) => String(index));
-  const [bounties, reports] = await Promise.all([
+  const appealIds = Array.from({ length: Number(appealTotal) }, (_, index) => String(index));
+  const [bounties, reports, appeals] = await Promise.all([
     Promise.all(bountyIds.map((id) => getBounty(id).catch(() => ({})))),
     Promise.all(reportIds.map((id) => getReport(id).catch(() => ({})))),
+    Promise.all(appealIds.map((id) => getAppeal(id).catch(() => ({})))),
   ]);
   state.bounties = bounties.filter((item) => item && item.bounty_id !== undefined);
   state.reports = reports.filter((item) => item && item.report_id !== undefined);
+  state.appeals = appeals.filter((item) => item && item.appeal_id !== undefined);
   state.reportStake = stake;
   state.pendingBalance = pendingBal;
   state.leaderboard = leaderboard || [];
@@ -237,28 +246,67 @@ function brandView() {
 }
 
 function hunterView() {
+  const currentAddress = getAccountAddress();
+  // Filter reports that this user submitted and can appeal (status is REJECTED or NEEDS_REVIEW)
+  const appealableReports = state.reports.filter(
+    (r) => r.hunter.toLowerCase() === currentAddress.toLowerCase() && (r.status === "REJECTED" || r.status === "NEEDS_REVIEW")
+  );
+  
+  // Also filter appeals submitted by this hunter
+  const myAppeals = state.appeals.filter((a) => {
+    const report = state.reports.find((r) => r.report_id === a.report_id);
+    return report && report.hunter.toLowerCase() === currentAddress.toLowerCase();
+  });
+
   return shell(`
     <section class="grid hunter-grid">
-      <form class="panel" id="submitReportForm">
-        <div class="panel-title">
-          <span class="signal amber"></span>
-          <h2>Submit suspect URL</h2>
-        </div>
-        <label>Bounty id
-          <select name="bountyId" required>
-            ${state.bounties
-              .filter((bounty) => bounty.active)
-              .map((bounty) => `<option value="${escapeHtml(bounty.bounty_id)}">#${escapeHtml(bounty.bounty_id)} ${escapeHtml(bounty.name)}</option>`)
-              .join("")}
-          </select>
-        </label>
-        <label>Suspect URL<input name="url" placeholder="https://login-acme-wallet.example" required /></label>
-        <label>Stake<input name="stake" inputmode="decimal" value="${formatStakeInput()}" /></label>
-        <button class="primary" type="submit">Submit Report</button>
-      </form>
+      <div style="display: flex; flex-direction: column; gap: 18px;">
+        <form class="panel" id="submitReportForm">
+          <div class="panel-title">
+            <span class="signal amber"></span>
+            <h2>Submit suspect URL</h2>
+          </div>
+          <label>Bounty id
+            <select name="bountyId" required>
+              ${state.bounties
+                .filter((bounty) => bounty.active)
+                .map((bounty) => `<option value="${escapeHtml(bounty.bounty_id)}">#${escapeHtml(bounty.bounty_id)} ${escapeHtml(bounty.name)}</option>`)
+                .join("")}
+            </select>
+          </label>
+          <label>Suspect URL<input name="url" placeholder="https://login-acme-wallet.example" required /></label>
+          <label>Stake<input name="stake" inputmode="decimal" value="${formatStakeInput()}" /></label>
+          <button class="primary" type="submit">Submit Report</button>
+        </form>
+
+        <form class="panel" id="fileAppealForm">
+          <div class="panel-title">
+            <span class="signal red"></span>
+            <h2>File appeal</h2>
+          </div>
+          <p class="hint" style="margin-top: 0; margin-bottom: 12px; font-size: 0.82rem;">
+            Dispute a REJECTED or NEEDS_REVIEW verdict. Requires an appeal fee equal to the original report stake.
+          </p>
+          <label>Report ID
+            <select name="reportId" required>
+              ${appealableReports.length > 0 
+                ? appealableReports.map(r => `<option value="${escapeHtml(r.report_id)}" ${state.selectedReport === r.report_id ? "selected" : ""}>Report #${escapeHtml(r.report_id)} (${escapeHtml(r.status)})</option>`).join("")
+                : `<option value="">No eligible reports to appeal</option>`
+              }
+            </select>
+          </label>
+          <button class="secondary" type="submit" ${appealableReports.length === 0 ? "disabled" : ""}>File Appeal</button>
+        </form>
+      </div>
+
       <div class="bounty-cards">
         ${state.bounties.length ? state.bounties.map(bountyCard).join("") : emptyState("No active bounties loaded yet.")}
       </div>
+    </section>
+
+    <section class="section-block">
+      <div class="section-heading"><h2>My Appeals</h2></div>
+      ${appealTable(myAppeals)}
     </section>
   `);
 }
@@ -420,6 +468,34 @@ function verdictCard(report) {
     }
   }
 
+  let appealBtnHtml = "";
+  const currentAddress = getAccountAddress();
+  const isMyReport = report.hunter.toLowerCase() === currentAddress.toLowerCase();
+  if (isMyReport && (report.status === "REJECTED" || report.status === "NEEDS_REVIEW")) {
+    appealBtnHtml = `
+      <div class="verdict-appeal-box" style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.82rem; color: var(--muted);">Disputed verdict? File an appeal to trigger re-evaluation.</span>
+        <button class="secondary claim-btn file-appeal-direct-btn" data-report-id="${escapeHtml(report.report_id)}" data-stake="${escapeHtml(report.stake)}" type="button">Appeal Verdict</button>
+      </div>
+    `;
+  }
+
+  let appealStatusHtml = "";
+  if (report.status === "APPEALED") {
+    const appeal = state.appeals.find((a) => a.report_id === report.report_id);
+    if (appeal) {
+      appealStatusHtml = `
+        <div class="verdict-appeal-box" style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 0.82rem; color: var(--muted);">Appeal #${escapeHtml(appeal.appeal_id)} is pending re-evaluation.</span>
+          ${appeal.status === "PENDING"
+            ? `<button class="primary claim-btn evaluate-appeal-btn" data-appeal-id="${escapeHtml(appeal.appeal_id)}" type="button">Evaluate Appeal</button>`
+            : `<span class="badge badge-${appeal.status === "OVERTURNED" ? "gold" : "silver"}">${escapeHtml(appeal.status)}</span>`
+          }
+        </div>
+      `;
+    }
+  }
+
   return `
     <article class="verdict">
       <div class="verdict-head">
@@ -442,6 +518,8 @@ function verdictCard(report) {
       ${perspectivesHtml}
       <div class="inert-url"><span>Suspect URL</span><code>${escapeHtml(report.url)}</code></div>
       ${sourcesListHtml}
+      ${appealBtnHtml}
+      ${appealStatusHtml}
     </article>
   `;
 }
@@ -449,6 +527,49 @@ function verdictCard(report) {
 function emptyState(message) {
   return `<div class="empty">${escapeHtml(message)}</div>`;
 }
+
+function appealTable(appeals) {
+  if (!appeals || !appeals.length) return emptyState("No appeals filed yet.");
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Appeal ID</th>
+            <th>Report ID</th>
+            <th>Original Status</th>
+            <th>Locked Fee</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${appeals
+            .map((appeal) => {
+              const showEval = appeal.status === "PENDING";
+              return `
+                <tr>
+                  <td>#${escapeHtml(appeal.appeal_id)}</td>
+                  <td>#${escapeHtml(appeal.report_id)}</td>
+                  <td><span class="chip warning">${escapeHtml(appeal.original_status)}</span></td>
+                  <td>${formatWei(appeal.fee)}</td>
+                  <td><span class="chip ${appeal.status === "OVERTURNED" ? "success" : appeal.status === "UPHELD" ? "clear" : "pending"}">${escapeHtml(appeal.status)}</span></td>
+                  <td>
+                    ${showEval 
+                      ? `<button class="primary claim-btn evaluate-appeal-btn" data-appeal-id="${escapeHtml(appeal.appeal_id)}">Evaluate</button>`
+                      : `<span class="muted-text">Completed</span>`
+                    }
+                  </td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 
 function leaderboardTable(leaderboard) {
   if (!leaderboard || !leaderboard.length) return emptyState("No hunters on the leaderboard yet.");
@@ -565,6 +686,25 @@ function bindEvents() {
       return;
     }
 
+    const evalAppealBtn = event.target.closest(".evaluate-appeal-btn");
+    if (evalAppealBtn) {
+      const appealId = evalAppealBtn.dataset.appealId;
+      run("Evaluating appeal consensus...", async () => {
+        await evaluateAppeal(appealId);
+      });
+      return;
+    }
+
+    const fileAppealDirectBtn = event.target.closest(".file-appeal-direct-btn");
+    if (fileAppealDirectBtn) {
+      const reportId = fileAppealDirectBtn.dataset.reportId;
+      const stake = fileAppealDirectBtn.dataset.stake;
+      run("Filing appeal and locking appeal fee...", async () => {
+        await fileAppeal(reportId, BigInt(stake));
+      });
+      return;
+    }
+
     const reportRow = event.target.closest("[data-report-id]");
     if (reportRow) {
       state.selectedReport = reportRow.dataset.reportId;
@@ -609,6 +749,24 @@ function bindEvents() {
     if (form.id === "submitReportForm") {
       run("Submitting suspect URL with anti-spam stake...", () =>
         submitReport(data.get("bountyId"), data.get("url"), toWei(data.get("stake"))),
+      );
+    }
+
+    if (form.id === "fileAppealForm") {
+      const reportId = data.get("reportId");
+      if (!reportId) {
+        state.error = "Please select a report to appeal.";
+        render();
+        return;
+      }
+      const report = state.reports.find((r) => r.report_id === reportId);
+      if (!report) {
+        state.error = "Selected report not found.";
+        render();
+        return;
+      }
+      run("Filing appeal and locking appeal fee...", () =>
+        fileAppeal(reportId, BigInt(report.stake))
       );
     }
 

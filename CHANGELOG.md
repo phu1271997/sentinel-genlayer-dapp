@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [v2.M4] — Appeal & Re-Evaluation Flow — 2026-06-20
+### Added
+- Implemented dispute resolution system allowing hunters to appeal negative verdicts (`REJECTED` or `NEEDS_REVIEW`).
+- Added on-chain storage for appeal data: `appeal_report_of`, `appeal_status_of`, `appeal_original_status_of`, `appeal_fee_of`, `appeal_verdict_of`, and counter `next_appeal_id`.
+- Created write method `file_appeal(report_id)` validating the caller is the original hunter, report is eligible, and exact original report stake is deposited as the appeal fee.
+- Created write method `evaluate_appeal(appeal_id)` executing a fresh comparative consensus round to uphold or overturn the verdict.
+- Implemented appeal economics:
+  - **OVERTURNED**: Refund original stake + appeal fee + scale-payout bounty to the hunter.
+  - **UPHELD**: Forfeit appeal fee (and original stake if report was in `NEEDS_REVIEW`) to the bounty pool.
+- Corrected reputation metrics dynamically upon overturned/upheld outcomes.
+- Added view methods: `get_appeal`, `get_appeal_verdict`, `get_appeal_count`.
+- Automated testing in `tests/test_appeal.py` verifying validators, overturned payouts, upheld forfeitures, and reputation changes.
+- Frontend Hunter Console integration: Added Appeal Panel form, My Appeals list table with direct Evaluate buttons, and inline Appeal Verdict button inside the Investigate Console's Verdict Card.
+
+### Evidence
+- Pytest execution: 13/13 tests passed.
+- Detailed architecture and state machine documented in `docs/APPEAL.md` and evidence in `docs/evidence/m4/evidence.md`.
+
 ## [v2.M3] — Hunter Reputation System — 2026-06-20
 ### Added
 - Created a robust reputation system tracking submissions, confirmation, rejection metrics, score, and tier.
