@@ -111,3 +111,9 @@ The app has three consoles:
 - Investigate: run the AI investigation and render the verdict card.
 
 Amounts are entered as GEN and converted to wei before contract calls.
+
+## Milestones
+
+List of completed upgrades and tagged releases for the GenLayer Builder Program:
+
+- **[v2.M1] — Security Hardening Bundle v1** (2026-06-20): Added prompt injection canary defense, input sanitization, safe TreeMap access, arithmetic overflow guards, pull-withdrawal pattern, double-evaluate lock, and automated unit tests. [Changelog](CHANGELOG.md#v2m1-security-hardening-bundle-v1-2026-06-20)
